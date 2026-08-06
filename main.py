@@ -19,10 +19,9 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Zeran Banking Bot is alive and running!"
+    return "Zeran Banking Bot is alive!"
 
 def run():
-    # Render automatically assigns a port via the environment variable
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -79,13 +78,6 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # ==================== HELPER FUNCTIONS ====================
-def create_embed(title, description, color=discord.Color.blue(), author=None):
-    embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now())
-    if author:
-        embed.set_author(name=author.display_name, icon_url=author.display_avatar.url)
-    embed.set_footer(text="Zeran Banking System  |  The ~~Z~~ Network")
-    return embed
-
 def fmt(amount):
     return f"{CURRENCY_EMOJI} **{amount:,}** {CURRENCY_SYMBOL}"
 
@@ -100,33 +92,39 @@ async def on_ready():
         print(f'❌ Failed to sync commands: {e}')
 
 # ==================== COMMANDS ====================
+
 # -------- /give --------
 @bot.tree.command(name="give", description="Give Zeran to another user")
 @app_commands.describe(user="The person you want to send Zeran to", amount="How much Zeran to send")
 async def give(interaction: discord.Interaction, user: discord.Member, amount: int):
     if amount <= 0:
-        await interaction.response.send_message(embed=create_embed("❌ Invalid Amount", "The amount must be greater than 0!", discord.Color.red()), ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(description="❌ Amount must be greater than 0!", color=discord.Color.red()), ephemeral=True)
         return
     if user.id == interaction.user.id:
-        await interaction.response.send_message(embed=create_embed("❌ Invalid Target", "You can't send Zeran to yourself!", discord.Color.red()), ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(description="❌ You can't send Zeran to yourself!", color=discord.Color.red()), ephemeral=True)
         return
     if user.bot:
-        await interaction.response.send_message(embed=create_embed("❌ Invalid Target", "You can't send Zeran to a bot!", discord.Color.red()), ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(description="❌ You can't send Zeran to a bot!", color=discord.Color.red()), ephemeral=True)
         return
 
     sender_data = get_user_data(interaction.user.id)
     if sender_data["balance"] < amount:
-        await interaction.response.send_message(embed=create_embed("❌ Insufficient Funds", f"You don't have enough Zeran!\n\n**Your Balance:** {fmt(sender_data['balance'])}\n**You Tried to Send:** {fmt(amount)}", discord.Color.red(), interaction.user), ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(description=f"❌ Insufficient funds! You have {fmt(sender_data['balance'])} but tried to send {fmt(amount)}.", color=discord.Color.red()), ephemeral=True)
         return
 
+    # Perform Transfer
     set_balance(interaction.user.id, sender_data["balance"] - amount)
     recipient_data = get_user_data(user.id)
     set_balance(user.id, recipient_data["balance"] + amount)
 
+    # Log Transactions
     add_transaction(interaction.user.id, f"Sent {amount} to {user.display_name}")
     add_transaction(user.id, f"Received {amount} from {interaction.user.display_name}")
 
-    embed = create_embed("💸 Transfer Successful", f"**{interaction.user.display_name}**  →  **{user.display_name}**\n\n**Amount Sent:** {fmt(amount)}\n━━━━━━━━━━━━━━━━━━━━━━━━\n**{interaction.user.display_name}'s New Balance:** {fmt(get_user_data(interaction.user.id)['balance'])}\n**{user.display_name}'s New Balance:** {fmt(get_user_data(user.id)['balance'])}", discord.Color.green(), interaction.user)
+    embed = discord.Embed(description=f"💸 **{interaction.user.display_name}** sent {fmt(amount)} to **{user.display_name}**", color=discord.Color.green())
+    embed.add_field(name="Your Balance", value=fmt(get_user_data(interaction.user.id)['balance']), inline=True)
+    embed.add_field(name="Their Balance", value=fmt(get_user_data(user.id)['balance']), inline=True)
+    embed.set_footer(text="Zeran Banking System")
     await interaction.response.send_message(embed=embed)
 
 # -------- /balance --------
@@ -141,50 +139,60 @@ async def balance(interaction: discord.Interaction, user: discord.Member = None)
     else:
         color, status = discord.Color.red(), "⚠️ In Debt"
 
-    embed = create_embed("🏦 Account Balance", f"**Account Holder:** {user.mention}\n━━━━━━━━━━━━━━━━━━━━━━━━\n**Balance:** {fmt(bal)}\n**Status:** {status}", color, interaction.user)
-    embed.set_thumbnail(url=user.display_avatar.url)
+    embed = discord.Embed(description=f"🏦 **{user.display_name}**\nBalance: {fmt(bal)}\nStatus: {status}", color=color)
+    embed.set_footer(text="Zeran Banking System")
     await interaction.response.send_message(embed=embed)
 
 # -------- /add (Admin) --------
 @bot.tree.command(name="add", description="[ADMIN] Pay a user for their contributions/salary")
-@app_commands.describe(user="The user to pay", amount="How much Zeran to add")
-async def add(interaction: discord.Interaction, user: discord.Member, amount: int):
+@app_commands.describe(user="The user to pay", amount="How much Zeran to add", reason="Why you are paying them")
+async def add(interaction: discord.Interaction, user: discord.Member, amount: int, reason: str):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message(embed=create_embed("🔒 Access Denied", "You need **Administrator** permissions to use this command!", discord.Color.red()), ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(description="🔒 You need **Administrator** permissions!", color=discord.Color.red()), ephemeral=True)
         return
     if amount <= 0:
-        await interaction.response.send_message(embed=create_embed("❌ Invalid Amount", "The amount must be greater than 0!", discord.Color.red()), ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(description="❌ Amount must be greater than 0!", color=discord.Color.red()), ephemeral=True)
         return
 
     new_balance = get_user_data(user.id)["balance"] + amount
     set_balance(user.id, new_balance)
-    add_transaction(user.id, f"Admin paid you {amount}")
+    add_transaction(user.id, f"Admin {interaction.user.display_name} added {amount} ({reason})")
 
-    embed = create_embed("💼 Salary / Contribution Payment", f"**Admin:** {interaction.user.mention}\n**Paid To:** {user.mention}\n━━━━━━━━━━━━━━━━━━━━━━━━\n**Amount Added:** {fmt(amount)}\n**New Balance:** {fmt(new_balance)}", discord.Color.green(), interaction.user)
+    embed = discord.Embed(title="💼 Payment Processed", color=discord.Color.green())
+    embed.add_field(name="User", value=user.mention, inline=True)
+    embed.add_field(name="Amount", value=fmt(amount), inline=True)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="New Balance", value=fmt(new_balance), inline=False)
+    embed.set_footer(text=f"Approved by {interaction.user.display_name}")
     await interaction.response.send_message(embed=embed)
 
 # -------- /remove (Admin) --------
 @bot.tree.command(name="remove", description="[ADMIN] Remove Zeran from a user's account")
-@app_commands.describe(user="The user to remove Zeran from", amount="How much Zeran to remove")
-async def remove(interaction: discord.Interaction, user: discord.Member, amount: int):
+@app_commands.describe(user="The user to remove Zeran from", amount="How much Zeran to remove", reason="Why you are removing it")
+async def remove(interaction: discord.Interaction, user: discord.Member, amount: int, reason: str):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message(embed=create_embed("🔒 Access Denied", "You need **Administrator** permissions to use this command!", discord.Color.red()), ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(description="🔒 You need **Administrator** permissions!", color=discord.Color.red()), ephemeral=True)
         return
     if amount <= 0:
-        await interaction.response.send_message(embed=create_embed("❌ Invalid Amount", "The amount must be greater than 0!", discord.Color.red()), ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(description="❌ Amount must be greater than 0!", color=discord.Color.red()), ephemeral=True)
         return
 
     old_balance = get_user_data(user.id)["balance"]
     new_balance = old_balance - amount
     set_balance(user.id, new_balance)
-    add_transaction(user.id, f"Admin removed {amount} from your account")
+    add_transaction(user.id, f"Admin {interaction.user.display_name} removed {amount} ({reason})")
 
+    embed = discord.Embed(title="➖ Zeran Removed", color=discord.Color.orange())
+    embed.add_field(name="User", value=user.mention, inline=True)
+    embed.add_field(name="Amount", value=fmt(amount), inline=True)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="New Balance", value=fmt(new_balance), inline=False)
+    
     if new_balance < 0:
-        color, debt_note = discord.Color.red(), f"\n\n⚠️ **WARNING: {user.display_name} is now in DEBT!**"
-    else:
-        color, debt_note = discord.Color.orange(), ""
-
-    embed = create_embed("➖ Zeran Removed (Admin)", f"**Admin:** {interaction.user.mention}\n**Target:** {user.mention}\n━━━━━━━━━━━━━━━━━━━━━━━━\n**Amount Removed:** {fmt(amount)}\n**Previous Balance:** {fmt(old_balance)}\n**New Balance:** {fmt(new_balance)}{debt_note}", color, interaction.user)
+        embed.color = discord.Color.red()
+        embed.description = "⚠️ **WARNING: This user is now in DEBT!**"
+        
+    embed.set_footer(text=f"Approved by {interaction.user.display_name}")
     await interaction.response.send_message(embed=embed)
 
 # -------- /leaderboard --------
@@ -200,16 +208,17 @@ async def leaderboard(interaction: discord.Interaction):
             member = await bot.fetch_user(int(uid))
             name = member.display_name
         except:
-            name = f"Unknown User ({uid})"
+            name = f"Unknown User"
         
         bal = data.get("balance", 0)
         desc += f"**{rank}.** {name} — {fmt(bal)}\n"
         rank += 1
 
     if not desc:
-        desc = "No data available yet. Be the first to get rich!"
+        desc = "No data available yet."
 
-    embed = create_embed("🏆 Zeran Leaderboard", desc, discord.Color.gold())
+    embed = discord.Embed(title="🏆 Zeran Leaderboard", description=desc, color=discord.Color.gold())
+    embed.set_footer(text="Zeran Banking System")
     await interaction.response.send_message(embed=embed)
 
 # -------- /transactions --------
@@ -218,7 +227,7 @@ async def leaderboard(interaction: discord.Interaction):
 async def transactions(interaction: discord.Interaction, user: discord.Member = None):
     if user is not None and user.id != interaction.user.id:
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(embed=create_embed("🔒 Access Denied", "You can only view your own transactions unless you are an Admin.", discord.Color.red()), ephemeral=True)
+            await interaction.response.send_message(embed=discord.Embed(description="🔒 You can only view your own transactions unless you are an Admin.", color=discord.Color.red()), ephemeral=True)
             return
     else:
         user = interaction.user
@@ -231,22 +240,23 @@ async def transactions(interaction: discord.Interaction, user: discord.Member = 
     else:
         desc = "\n".join([f"• {t}" for t in history])
 
-    embed = create_embed("📜 Transaction History", f"**Account:** {user.mention}\n━━━━━━━━━━━━━━━━━━━━━━━━\n{desc}", discord.Color.blue(), user)
+    embed = discord.Embed(title="📜 Transaction History", description=f"**{user.display_name}**\n{desc}", color=discord.Color.blue())
+    embed.set_footer(text="Zeran Banking System")
     await interaction.response.send_message(embed=embed)
 
 # -------- /zeranhelp --------
 @bot.tree.command(name="zeranhelp", description="View all Zeran banking commands")
 async def zeranhelp(interaction: discord.Interaction):
-    embed = discord.Embed(title="🏦 Zeran Banking System", description=f"Welcome to the official **{CURRENCY_NAME}** {CURRENCY_EMOJI} banking system!\nBelow are all available commands:", color=discord.Color.blue(), timestamp=datetime.now())
-    embed.set_footer(text="Zeran Banking System  |  The ~~Z~~ Network")
+    embed = discord.Embed(title="🏦 Zeran Banking System", description=f"The official **{CURRENCY_NAME}** {CURRENCY_EMOJI} banking system commands:", color=discord.Color.blue())
     
     embed.add_field(name="💸 /give `<user> <amount>`", value="Send Zeran to another user.", inline=False)
-    embed.add_field(name="🏦 /balance `[user]`", value="Check your balance or someone else's.", inline=False)
-    embed.add_field(name="📜 /transactions `[user]`", value="View your last 5 transactions.", inline=False)
-    embed.add_field(name="🏆 /leaderboard", value="See the top 10 richest users.", inline=False)
-    embed.add_field(name="➕ /add `<user> <amount>` 🔒", value="[Admin] Pay a user for contributions/salary.", inline=False)
-    embed.add_field(name="➖ /remove `<user> <amount>` 🔒", value="[Admin] Remove Zeran from a user.", inline=False)
+    embed.add_field(name="🏦 /balance `[user]`", value="Check a balance.", inline=False)
+    embed.add_field(name="📜 /transactions `[user]`", value="View last 5 transactions.", inline=False)
+    embed.add_field(name="🏆 /leaderboard", value="See the top 10 users.", inline=False)
+    embed.add_field(name="➕ /add `<user> <amount> <reason>` 🔒", value="[Admin] Pay a user.", inline=False)
+    embed.add_field(name="➖ /remove `<user> <amount> <reason>` 🔒", value="[Admin] Remove Zeran.", inline=False)
 
+    embed.set_footer(text="Zeran Banking System")
     await interaction.response.send_message(embed=embed)
 
 # ==================== RUN ====================
